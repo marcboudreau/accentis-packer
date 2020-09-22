@@ -16,23 +16,27 @@ provider "google" {
     region = "us-central1"
 }
 
-variable "image_name" {
-    description = "The name of the image to test"
-    type        = string
+variable "image_names" {
+    description = "A list of names for images to test"
+    type        = list(string)
 }
 
 resource "google_compute_instance" "test" {
+    count = length(var.image_names)
+
     boot_disk {
         initialize_params {
-            image = var.image_name
+            image = var.image_names[count.index]
         }
     }
     
     machine_type = "n1-standard-1"
-    name         = "accentis-packer-test-bastion"
+    name         = "accentis-packer-${var.image_names[count.index]}"
     zone         = "us-central1-a"
     
     network_interface {
+        network = "default"
+
         access_config {}
     }
 
@@ -50,4 +54,8 @@ resource "google_compute_instance" "test" {
         enable_vtpm                 = true 
         enable_integrity_monitoring = true
     }
+}
+
+output "instance_ip" {
+    value = google_compute_instance.test[*].network_interface.0.access_config.0.nat_ip
 }

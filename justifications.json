@@ -1,0 +1,19 @@
+{
+  "bastion": [
+    {
+      "1.5.1": "Google Compute Engine instances cannot properly boot with bootloader passwords in place."
+    },
+    {
+      "3.5.1.1": "Using nftables instead of ufw."
+    },
+    {
+      "3.5.3.1.1": "Using nftables instead of iptables."
+    },
+    {
+      "4.2.1.5": "Using google-fluentd agent to forward all syslogs to Cloud Logging."
+    },
+    {
+      "4.2.3": "Some files in /var/log violate this section and cannot be modified."
+    }
+  ]
+}
