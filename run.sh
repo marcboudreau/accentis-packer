@@ -76,6 +76,17 @@ function gcp_login {
 }
 
 #
+# generate_ssh_key:
+#   This function generates a new SSH key pair that will be configured onto the
+#   test instances.  This key pair will be used to run the verification test
+#   suite.  The key pair is generated in the temporary work directory, so it is
+#   automatically deleted when the script exits.
+#
+function generate_ssh_keys {
+    ssh-keygen -q -b 2048 -t rsa -N '' -C '' -f $work_directory/id_rsa
+}
+
+#
 # packer:
 #   This function is a convenient wrapper that runs Packer using a container,
 #   so that Packer doesn't need to be installed on the workstation.  This
@@ -90,7 +101,7 @@ function packer {
         --rm \
         -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \
         --mount type=bind,source="$work_directory/gcp_creds",target=/root/.config/gcloud,readonly \
-        --mount type=bind,source="$root_directory",target=/work,readonly \
+        --mount type=bind,source="$root_directory",target=/work \
         -w /work \
         hashicorp/packer:1.6.2 \
         build \
@@ -139,8 +150,8 @@ function terraform {
 #
 function to_list_string {
     string=
-    while [ $1 ]; do
-        string=$string,"$1"
+    while [ $# -gt 0 ]; do
+        string="$string,\"$1\""
         shift
     done
 
@@ -155,33 +166,69 @@ if accentis_vault_usable ; then
     mkdir -p $work_directory/gcp_creds
     accentis_vault read -field=private_key_data gcp/key/terraform-bootstrap | base64 --decode > $work_directory/gcp_creds/application_default_credentials.json
 else
-    read -s -p "Enter password to set for root account in image (will be hidden): " root_password
+    if [ ! "${PACKER_ROOT_PASSWORD:-}" ]; then
+        read -s -p "Enter password to set for root account in image (will be hidden): " root_password
+    else
+        root_password=$PACKER_ROOT_PASSWORD
+    fi
 
     gcp_login
 fi
 
-packer
-image_names=($(jq '[.builds[].artifact_id][]' manifest.json | tr '\n' ' ' | tr -d '"'))
+# Run Packer to build the images.
+#packer
+
+# Extract the produced image names.
+last_run_uuid=$(jq -r '.last_run_uuid' manifest.json)
+image_names=($(jq '[.builds[]|select(.packer_run_uuid=="'$last_run_uuid'").artifact_id][]' manifest.json | tr '\n' ' ' | tr -d '"'))
 image_names_list=$(to_list_string ${image_names[@]})
 
+# Generate temporary SSH keys for this execution.
+generate_ssh_keys
+
 # Provision the test instances.
-terraform apply -auto-approve -var 'image_names=['$image_names_list']'
+terraform apply -auto-approve -var 'image_names=['$image_names_list']' -var public_ssh_key="$(cat $work_directory/id_rsa.pub)"
+ip_addresses=($(skip_terraform_init=1 terraform output -no-color -json instance_ip | tr -d '[]"\r' | tr ',' ' '))
 
-ip_addresses=($(skip_terraform_init=1 terraform output -no-color -json instance_ip | tr -d '[]"' | tr ',' ' '))
-
+# The verify_failed array contains the names of failed images.
 verify_failed=()
-i=0
-while [ $i -lt ${#ip_addresses[@]}; do
-    build_name=$(jq -r '.builds[]|select(.artifact_id=="'${image_names[$i]}'").name')
-    skip_vars=$(jq -r '.'$build_name'[]|keys[]' justifications.json 2> /deb/null | sed -e 's/^/export SKIP_' -e 's/$/=1/' -e 's/\./_/g' | tr '\n' ';' | sed 's/;/; /g')
-    echo "Verifying $build_name"
-    scp $root_directory/verify/audit.sh ubuntu@${ip_addresses[$i]}:/tmp/audit.sh
-    ssh ubuntu@ip_address sudo bash -c 'chmod +x /tmp/audit.sh; '$skip_vars' /tmp/audit.sh' || verify_failed+=($build_name)
-    i=$(expr $i + 1)
-done
+
+(
+    # Iterate over each produced image to run the verification test suite.
+    i=0
+    while [ $i -lt ${#ip_addresses[@]} ]; do
+        # Build up the verify.env file (contains the SKIP_ environment variables).
+        build_name=$(jq -r '.builds[]|select(.packer_run_uuid=="'$last_run_uuid'")|select(.artifact_id=="'${image_names[$i]}'").name' manifest.json)
+        jq -r '.'$build_name'[]|keys[]' justifications.json 2> /dev/null | sed -e 's/^/SKIP_/' -e 's/$/=x/' -e 's/\./_/g' > $work_directory/verify.env
+
+        # Wait until port 22 is open at the remote IP address.
+        tries=0
+        while ! nc -z ${ip_addresses[$i]} 22 > /dev/null 2>&1 ; do
+            tries=$(($tries + 1))
+            if (( $tries > 100 )); then
+                echo "Maximum number of attempts to reach port 22 on ${ip_addresses[$i]} to verify $build_name image: moving on."
+                verify_failed+=($build_name)
+                continue 2
+            fi
+
+            sleep 1
+        done
+
+        # Upload the audit.sh script and the verify.env exemption file.
+        #scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$root_directory/verify/audit.sh" "ubuntu@${ip_addresses[$i]}:/tmp/audit.sh"
+        scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$work_directory/verify.env" "ubuntu@${ip_addresses[$i]}:/tmp/verify.env"
+
+        # Adjust permissions and ownership of the audit.sh file and run it.
+        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@${ip_addresses[$i]}" "sudo chmod 0755 /tmp/audit.sh"
+        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@${ip_addresses[$i]}" "sudo chown root:root /tmp/audit.sh"
+        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@${ip_addresses[$i]}" "sudo bash /tmp/audit.sh" || verify_failed+=($build_name)
+
+        i=$(($i + 1))
+    done
+) || true
 
 # Destroy the test instances.
-terraform destroy -auto-approve -var 'image_names=['$image_names_list']'
+skip_terraform_init=1 terraform destroy -auto-approve -var 'image_names=['$image_names_list']' -var public_ssh_key="$(cat $work_directory/id_rsa.pub)"
 
 # Clean up Terraform related files.
 rm -rf $root_directory/verify/.terraform $root_directory/verify/terraform.tfstate*

@@ -21,6 +21,17 @@ variable "image_names" {
     type        = list(string)
 }
 
+variable "public_ssh_key" {
+    description = "The public SSH key to configure on the instances."
+    type        = string
+}
+
+variable "ssh_username" {
+    description = "The username to configure the public_ssh_key with."
+    type        = string
+    default     = "ubuntu"
+}
+
 resource "google_compute_instance" "test" {
     count = length(var.image_names)
 
@@ -42,7 +53,7 @@ resource "google_compute_instance" "test" {
 
     allow_stopping_for_update = false
     metadata = {
-        ssh-keys = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDLn7TP1EVosXwyvm0ax0LSxxGR/wWn0FP8Nc3BAWeH99yallHNqjy4xJHbeJXramYgAUwCtFAY0NUFFw270NS7VK4AgOiughXuEZV+e6N4Q9CwjP3KY+HK71W1UQiSMPNl1bJaBZvlFtSkv5HzbP8AeogEIqSqVBJSLs43Ear4Y4kcdCz4ITfMgHQUpdWCFGTX4WufKsLPsTFSPAUeswDfEAy5ldDc1iAwZ/jsFVwqq/+c0+ahl1VkMIJTMVaHCSepevOoi3bIFBQrtciLSA37qjBGfTiMcs2F28zudBTJQEQWpibfv5P2XfY3EyCJQjWpCzNtk4KgYc5uCiOB1zIB ubuntu@server.local"
+        ssh-keys = "${var.ssh_username}:${var.public_ssh_key}"
     }
     project = "accentis-288921"
     scheduling {
