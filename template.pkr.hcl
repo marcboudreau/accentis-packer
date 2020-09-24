@@ -24,7 +24,7 @@ source "googlecompute" "bastion" {
     enable_vtpm                 = true
     enable_integrity_monitoring = true
 
-    image_name = "bastion-${var.commit_hash}"
+    image_name = "bastion-candidate-${var.commit_hash}"
     
     image_storage_locations = [
         "us",

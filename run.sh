@@ -28,6 +28,24 @@ function accentis_vault_usable {
 }
 
 #
+# accentis_gcloud: 
+#   This function is a convenient wrapper that runs gcloud commands using a
+#   container, so that Google Cloud SDK doesn't need to be installed on the
+#   workstation.  This function passes all of its arguments to the container
+#   as gcloud arguments.  This function also ensures that the directory
+#   $work_directory/gcp_creds exists, and bind mounts that directory as a
+#   volume into the container.
+#
+function accentis_gcloud {
+    mkdir -p $work_directory/gcp_creds
+
+    docker run -it \
+        --mount type=bind,source=$work_directory/gcp_creds,target=/root/.config/gcloud \
+        gcr.io/google.com/cloudsdktool/cloud-sdk:latest \
+        gcloud "@$@"
+}
+
+#
 # accentis_vault:
 #   This function is a convenient wrapper that runs Vault commands using a
 #   container, so that the Vault client doesn't need to be installed on the
@@ -158,6 +176,37 @@ function to_list_string {
     echo ${string:1}
 }
 
+#
+# promote_image:
+#   This function creates a new GCE Image using the candidate image as the
+#   source and assigns it to the specified image family.  Once the image has
+#   been successfully completed, the candidate image is deleted.
+#
+function promote_image {
+    local candidate_name=$1
+    local family_name=$2
+    local release_name=${candidate_name/"candidate-"/}
+
+    # Clone the candidate image as an image in the specified image family and
+    #   if successful, delete the candidate image.
+    gcloud compute images create $release_name \
+            --source-image $candidate_name \
+            --family $family_name && \
+        gcloud compute images delete $candidate_name
+
+    # Obtain list of images from the specified image family and trim off the
+    # first two items.  These images will be permanently deleted.
+    excess_images=($(gcloud compute images list \
+            --filter "family: $family_name" \
+            --sort-by "~creationTimestamp" \
+            --format "value(name)" | \
+            awk '{print $1}' | tail +3))
+
+    for excess_image in ${excess_images[@]}; do
+        gcloud compute images delete $excess_image
+    done
+}
+
 commit_hash=$(git rev-parse --short HEAD)
 
 if accentis_vault_usable ; then
@@ -197,16 +246,19 @@ verify_failed=()
     # Iterate over each produced image to run the verification test suite.
     i=0
     while [ $i -lt ${#ip_addresses[@]} ]; do
+        ip_address=${ip_addresses[$i]}
+        image_name=${image_names[$i]}
+
         # Build up the verify.env file (contains the SKIP_ environment variables).
-        build_name=$(jq -r '.builds[]|select(.packer_run_uuid=="'$last_run_uuid'")|select(.artifact_id=="'${image_names[$i]}'").name' manifest.json)
+        build_name=$(jq -r '.builds[]|select(.packer_run_uuid=="'$last_run_uuid'")|select(.artifact_id=="'$image_name'").name' manifest.json)
         jq -r '.'$build_name'[]|keys[]' justifications.json 2> /dev/null | sed -e 's/^/SKIP_/' -e 's/$/=x/' -e 's/\./_/g' > $work_directory/verify.env
 
         # Wait until port 22 is open at the remote IP address.
         tries=0
-        while ! nc -z ${ip_addresses[$i]} 22 > /dev/null 2>&1 ; do
+        while ! nc -z $ip_address 22 > /dev/null 2>&1 ; do
             tries=$(($tries + 1))
             if (( $tries > 100 )); then
-                echo "Maximum number of attempts to reach port 22 on ${ip_addresses[$i]} to verify $build_name image: moving on."
+                echo "Maximum number of attempts to reach port 22 on $ip_address to verify $build_name image: moving on."
                 verify_failed+=($build_name)
                 continue 2
             fi
@@ -216,12 +268,20 @@ verify_failed=()
 
         # Upload the audit.sh script and the verify.env exemption file.
         #scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$root_directory/verify/audit.sh" "ubuntu@${ip_addresses[$i]}:/tmp/audit.sh"
-        scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$work_directory/verify.env" "ubuntu@${ip_addresses[$i]}:/tmp/verify.env"
+        scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$work_directory/verify.env" "ubuntu@$ip_address:/tmp/verify.env"
+
+        failed=0
 
         # Adjust permissions and ownership of the audit.sh file and run it.
-        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@${ip_addresses[$i]}" "sudo chmod 0755 /tmp/audit.sh"
-        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@${ip_addresses[$i]}" "sudo chown root:root /tmp/audit.sh"
-        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@${ip_addresses[$i]}" "sudo bash /tmp/audit.sh" || verify_failed+=($build_name)
+        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@$ip_address" "sudo chmod 0755 /tmp/audit.sh"
+        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@$ip_address" "sudo chown root:root /tmp/audit.sh"
+        ssh -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR "ubuntu@$ip_address" "sudo bash /tmp/audit.sh" || failed=1
+        
+        if [[ $failed == 1 ]]; then
+            verify_failed+=($build_name)
+        else
+            promote_image $image_name $build_name
+        fi
 
         i=$(($i + 1))
     done

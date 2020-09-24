@@ -3,54 +3,39 @@ accentis-packer
 
 This repository contains [Packer](https://packer.io) specifications for building Google Compute Engine (GCE) Images.  These Images are used to initialize the boot disk of GCE Instances provisioned within the Accentis Google Cloud Platform (GCP) projects.
 
-# Format
+# Packer
 
-Packer supports two formats for its specification file: **JSON** and **HCL**.  The **HCL** is used in this repository because it is more readable than the **JSON** format.
+Packer supports two formats for its template file: **JSON** and **HCL**.  The **HCL** is used in this repository because it is more readable than the **JSON** format.  The template file can produce different images, each is identified by a build name.
 
 # Image Lifecycle
 
-The complete lifecycle of a GCE Image consists of the following phases:
-* candidate creation
-* candidate validation
-* promotion
-* deprecation
-* removal
+This process leverages GCE Image Families to manage the lifecycle of the images it produces.
 
 ![Lifecycle Diagram](./packer-image-lifecycle.png)
 
-The automation in this repository covers the first three phases.
+## GCE Image Families
 
-## Candidate Creation
+GCE Image Families are used to group revisions of the same image project.  Referring to an image families instead of a specific images, will result in the latest non-deprecated image within that family to be used.
 
-The candidate creation phase is the initial phase of an Image.  The Packer tool is used in the automated build process to produce a candidate image.
+## Automated Process
 
-## Candidate Validation
+The automated process consists of three phases:
+1. Build phase
+1. Verification phase
+1. Promotion phase
 
-Once a candidate image has been produced, the automated build process launches the validation routine.  This consists of launching a GCE Instance using the candidate image.  Once the instance is running, a series of verification steps are executed to determine the validity of the candidate image.
+The Build phase consists of running Packer tool to produce all of the images defined in the template.  The produced images are candidate images.  The candidate images are named: `<build_name>-candidate-<commit_hash>`.  The `<build_name>` is the name of the image as specified in the **source** block in the template file.  The `<commit_hash>` is the shorthand git commit hash.
 
-## Promotion
+The Verification phase consists of launching test instances for each of the candidate images.  Once the instances are launched, a verification script is uploaded to each of the instances and executed.
 
-Candidate images that have passed all of their verification steps, are promoted to release images.  This promotion is done by adding the image to an GCE Image Family.  Image families are sets of versions of an image.  When other resources need to specify an image to use, they can instead specify an image family.  Doing so will result in the latest, non-deprecated, image version to be used.  This feature makes it possible to roll-out new image versions, without having to go and update specific image URLs in resources like GCE Instance Templates.
-
-## Deprecation
-
-As newer versions of an image are released, older versions are no longer needed.  Deprecating an image allows for a graceful end-of-life transition.  GCE provides three deprecation states: **DEPRECATED**, **OBSOLETE**, and **DELETED**.  These different states affect operations that try to use the image as follows:
-* **DEPRECATED**: existing and new links to the image still work, but a warning is emitted
-* **OBSOLETE**: existing links to the image still work; attempts to create new links to the image result in an error
-* **DELETED**: existing links to the image no longer work; attempts to create new links to the image also result in an error
-
-> *Note:* Setting an image's deprecation state to deleted does not delete the image.
-
-## Removal
-
-After an image has been deprecated and it is no longer used, it is permanently deleted in order to save on storage costs.
+The Promotion phase consists of cloning the candidate image into an image whose name has `-candidate` removed from the name and is a member of the image family bearing the same name as the `<build_name>`.  During the promotion phase, the process ensures that no more than two images exist in the image family.  If there are more than two images, the older ones are deleted.
 
 # Repository Organization
 
 This repository is organized into:
-* a Packer template file and additional files to upload into images
+* a Packer template file (**template.pkr.hcl**) and additional files to upload into images
 * a **verify** directory containing code to verify produced images
-* a Justifications file
+* a Justifications file (**justifications.json**)
 
 ## Packer Template
 
