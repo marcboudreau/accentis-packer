@@ -32,6 +32,22 @@ variable "ssh_username" {
     default     = "ubuntu"
 }
 
+variable "project" {
+    description = "The GCP project ID"
+    type        = string
+    default     = "accentis-288921"
+}
+
+data "google_kms_key_ring" "test" {
+    name     = "${var.project}-keyring"
+    location = "global"
+}
+
+data "google_kms_crypto_key" "test" {
+    name     = "disk-encryption"
+    key_ring = data.google_kms_key_ring.test.self_link
+}
+
 resource "google_compute_instance" "test" {
     count = length(var.image_names)
 
@@ -39,6 +55,7 @@ resource "google_compute_instance" "test" {
         initialize_params {
             image = var.image_names[count.index]
         }
+        kms_key_self_link = data.google_kms_crypto_key.test.self_link
     }
     
     machine_type = "n1-standard-1"
@@ -55,7 +72,7 @@ resource "google_compute_instance" "test" {
     metadata = {
         ssh-keys = "${var.ssh_username}:${var.public_ssh_key}"
     }
-    project = "accentis-288921"
+    project = var.project
     scheduling {
         preemptible       = true
         automatic_restart = false
