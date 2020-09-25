@@ -26,9 +26,7 @@ source "googlecompute" "bastion" {
 
     image_name = "bastion-candidate-${var.commit_hash}"
     
-    image_encryption_key {
-        kms_key_name = "projects/${var.project}/locations/global/keyRings/${var.project}-keyring/cryptoKeys/disk-encryption"
-    }
+    image_encryption_key = "projects/${var.project}/locations/global/keyRings/${var.project}-keyring/cryptoKeys/disk-encryption"
 
     image_storage_locations = [
         "us",

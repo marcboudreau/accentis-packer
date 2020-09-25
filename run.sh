@@ -225,7 +225,7 @@ else
 fi
 
 # Run Packer to build the images.
-#packer
+packer
 
 # Extract the produced image names.
 last_run_uuid=$(jq -r '.last_run_uuid' manifest.json)

@@ -41,6 +41,7 @@ variable "project" {
 data "google_kms_key_ring" "test" {
     name     = "${var.project}-keyring"
     location = "global"
+    project  = var.project
 }
 
 data "google_kms_crypto_key" "test" {

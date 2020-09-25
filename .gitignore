@@ -1,1 +1,3 @@
 manifest.json
+verify/.terraform/
+verify/terraform.tfstate*
