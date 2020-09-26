@@ -56,7 +56,7 @@ resource "google_compute_instance" "test" {
         initialize_params {
             image = var.image_names[count.index]
         }
-        kms_key_self_link = data.google_kms_crypto_key.test.self_link
+        # kms_key_self_link = data.google_kms_crypto_key.test.self_link
     }
     
     machine_type = "n1-standard-1"
@@ -74,10 +74,16 @@ resource "google_compute_instance" "test" {
         ssh-keys = "${var.ssh_username}:${var.public_ssh_key}"
     }
     project = var.project
+    
     scheduling {
         preemptible       = true
         automatic_restart = false
     }
+
+    service_account {
+        scopes = ["cloud-platform"]
+    }
+
     shielded_instance_config {
         enable_secure_boot          = true
         enable_vtpm                 = true 
