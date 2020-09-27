@@ -114,7 +114,6 @@ build {
             "apt-get -y -q install aide",
             "aideinit",
         ]
-        #inline_shebang = "/bin/bash -ex"
         environment_vars = [
             "DEBIAN_FRONTEND=noninteractive",
         ]
