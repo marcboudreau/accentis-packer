@@ -191,20 +191,23 @@ function promote_image {
     #   if successful, delete the candidate image.
     gcloud compute images create $release_name \
             --source-image $candidate_name \
-            --family $family_name && \
-        gcloud compute images delete $candidate_name
+            --family $family_name --quiet && \
+        gcloud compute images delete $candidate_name --quiet
 
     # Obtain list of images from the specified image family and trim off the
     # first two items.  These images will be permanently deleted.
     excess_images=($(gcloud compute images list \
             --filter "family: $family_name" \
             --sort-by "~creationTimestamp" \
-            --format "value(name)" | \
+            --format "value(name)" \
+            --quiet | \
             awk '{print $1}' | tail +3))
 
-    for excess_image in ${excess_images[@]}; do
-        gcloud compute images delete $excess_image
-    done
+    if [ ${#excess_images[@]} -gt 0 ]; then
+        for excess_image in ${excess_images[@]}; do
+            gcloud compute images delete $excess_image --quiet
+        done
+    fi
 }
 
 commit_hash=$(git rev-parse --short HEAD)
@@ -267,7 +270,7 @@ verify_failed=()
         done
 
         # Upload the audit.sh script and the verify.env exemption file.
-        #scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$root_directory/verify/audit.sh" "ubuntu@${ip_addresses[$i]}:/tmp/audit.sh"
+        scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$root_directory/verify/audit.sh" "ubuntu@${ip_addresses[$i]}:/tmp/audit.sh"
         scp -q -i $work_directory/id_rsa -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$work_directory/verify.env" "ubuntu@$ip_address:/tmp/verify.env"
 
         failed=0
