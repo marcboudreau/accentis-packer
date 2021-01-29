@@ -2,11 +2,6 @@ variable "project" {
     type = string
 }
 
-variable "base_image_family" {
-    type    = string
-    default = "ubuntu-minimal-2004-lts" 
-}
-
 variable "root_password" {
     type = string
 }
@@ -15,9 +10,29 @@ variable "commit_hash" {
     type = string
 }
 
+source "amazon-ebs" "bastion" {
+    ami_name    = "bastion-candidate-${var.commit_hash}"
+    ami_regions = ["us-east-2"]
+    
+    region = "us-east-2"
+
+    instance_type = "t2.small"
+    source_ami_filter {
+        filters = {
+            virtualization-type = "hvm"
+            name                = "ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"
+            root-device-type    = "ebs"
+        }
+        owners      = ["099720109477"]
+        most_recent = true
+    }
+
+    ssh_username = "ubuntu"
+}
+
 source "googlecompute" "bastion" {
     project_id          = var.project
-    source_image_family = var.base_image_family
+    source_image_family = "ubuntu-minimal-2004-lts"
     zone = "us-central1-a"
 
     enable_secure_boot          = true
@@ -45,6 +60,7 @@ source "googlecompute" "bastion" {
 build {
     sources = [
         "source.googlecompute.bastion",
+        "source.amazon-ebs.bastion",
     ]
 
     # Pause for 10 seconds to give a chance to cloud-init to finish.
@@ -139,6 +155,15 @@ build {
         execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
     }
 
+    # CIS 1.6.2 Ensure address space layout randomization (ASLR) is enabled
+    provisioner "shell" {
+        inline = [
+            "echo 'kernel.randomize_va_space = 2' >> /etc/sysctl.d/90-accentis-cis.conf",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["amazon-ebs.bastion"]
+    }
+
     # CIS 1.6.4 Ensure core dumps are restricted
     provisioner "shell" {
         inline = [
@@ -192,6 +217,40 @@ build {
         execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
     }
 
+    # CIS 2.2.16 Ensure rsync service is not installed
+    provisioner "shell" {
+        inline = [
+            "apt purge -y rsync",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        environment_vars = [
+            "DEBIAN_FRONTEND=noninteractive",
+        ]
+        only = ["amazon-ebs.bastion"]
+    }
+
+    # CIS 2.3.4 Ensure telnet client is not installed
+    provisioner "shell" {
+        inline = [
+            "apt purge -y telnet",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        environment_vars = [
+            "DEBIAN_FRONTEND=noninteractive",
+        ]
+        only = ["amazon-ebs.bastion"]
+    }
+
+    # CIS 3.2.1 Ensure packet redirect sending is disabled
+    provisioner "shell" {
+        inline = [
+            "sed -i '/^#net\\.ipv4\\.conf\\.all\\.send_redirects/ s/^#//' /etc/sysctl.conf",
+            "sed -i '$anet.ipv4.conf.default.send_redirects=0' /etc/sysctl.conf",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["amazon-ebs.bastion"]
+    }
+
     # CIS 3.2.2 Ensure IP forwarding is disabled
     provisioner "shell" {
         inline = [
@@ -228,6 +287,53 @@ build {
         execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
     }
 
+    # CIS 3.3.4 Ensure suspicious packets are logged
+    provisioner "shell" {
+        inline = [
+            "sed -i '/^#net\\.ipv4\\.conf\\.all\\.log_martians/ s/^#//' /etc/sysctl.conf",
+            "sed -i '$anet.ipv4.conf.default.log_martians=1' /etc/sysctl.conf",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["amazon-ebs.bastion"]
+    }
+
+    # CIS 3.3.5 Ensure broadcast ICMP requests are ignored
+    provisioner "shell" {
+        inline = [
+            "sed -i '$anet.ipv4.icmp_echo_ignore_broadcasts=1' /etc/sysctl.conf",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["amazon-ebs.bastion"]
+    }
+
+    # CIS 3.3.6 Ensure bogus ICMP responses are ignored
+    provisioner "shell" {
+        inline = [
+            "sed -i '$anet.ipv4.icmp_ignore_bogus_error_responses=1' /etc/sysctl.conf",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["amazon-ebs.bastion"]
+    }
+
+    # CIS 3.3.7 Ensure Reverse Path Filtering is enabled
+    provisioner "shell" {
+        inline = [
+            "sed -i '/^#net\\.ipv4\\.conf\\.all\\.rp_filter/ s/^#//' /etc/sysctl.conf",
+            "sed -i '/^#net\\.ipv4\\.conf\\.default\\.rp_filter/ s/^#//' /etc/sysctl.conf",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["amazon-ebs.bastion"]
+    }
+
+    # CIS 3.3.8 Ensure TCP SYN Cookies is enabled
+    provisioner "shell" {
+        inline = [
+            "sed -i '/^#net\\.ipv4\\.tcp_syncookies/ s/^#//' /etc/sysctl.conf",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["amazon-ebs.bastion"]
+    }
+
     # CIS 3.3.9 Ensure IPv6 router advertisements are not accepted
     provisioner "shell" {
         inline = [
@@ -235,6 +341,19 @@ build {
             "sed -i '$anet.ipv6.conf.default.accept_ra=0' /etc/sysctl.conf",
         ]
         execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+    }
+
+    # CIS 3.5.1.1 Ensure Uncomplicated Firewall is installed
+    #  This template opts for nftables as the firewall to use, so ufw is being removed
+    provisioner "shell" {
+        inline = [
+            "apt purge -y ufw",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        environment_vars = [
+            "DEBIAN_FRONTEND=noninteractive",
+        ]
+        only = ["amazon-ebs.bastion"]
     }
 
     # CIS 3.5.2 Configure nftables
@@ -259,6 +378,19 @@ build {
         ]
     }
 
+    # CIS 3.5.3.1.1 Ensure iptables packages are installed
+    #   This template opts for nftables as the firewall to use, so iptables packages are being removed.
+    provisioner "shell" {
+        inline = [
+            "apt purge -y iptables iptables-persistent",
+        ]
+        execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        environment_vars = [
+            "DEBIAN_FRONTEND=noninteractive",
+        ]
+        only = ["amazon-ebs.bastion"]
+    }
+
     # Installing Google Cloud Logging Agent
     provisioner "shell" {
         inline = [
@@ -274,6 +406,7 @@ build {
             "DEBIAN_FRONTEND=noninteractive",
         ]
         execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
+        only = ["source.googlecompute.bastion"]
     }
 
     # CIS 4.2.2.1 Ensure journald is configured to send logs to rsyslog
@@ -421,10 +554,5 @@ build {
             "chmod 0750 /home/*",
         ]
         execute_command = "chmod +x {{ .Path }}; sudo -S env {{ .Vars }} {{ .Path }}"
-    }
-
-    # Generate a manifest of artifacts produced.
-    post-processor "manifest" {
-        output = "manifest.json"
     }
 }
